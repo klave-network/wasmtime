@@ -1,13 +1,15 @@
-use anyhow::{bail, ensure, Context, Result};
-use wasmtime::component::{Component, Func, Instance, Linker, Type, Val};
+use anyhow::{anyhow, bail, ensure, Context, Result};
+use wasmtime::component::{Component, Func, Instance, Linker, LinkerInstance, Type, Val};
 use wasmtime::{AsContext, AsContextMut};
 
 use crate::{
-    declare_vecs, handle_call_error, handle_result, wasm_byte_vec_t, wasm_config_t, wasm_engine_t,
-    wasm_name_t, wasm_trap_t, wasmtime_error_t, CStoreContextMut, StoreData,
+    bad_utf8, declare_vecs, handle_call_error, handle_result, to_str, wasm_byte_vec_t,
+    wasm_config_t, wasm_engine_t, wasm_name_t, wasm_trap_t, wasmtime_error_t, CStoreContextMut,
+    StoreData,
 };
+use core::ffi::c_void;
 use std::collections::HashMap;
-use std::{mem, mem::MaybeUninit, ptr, slice};
+use std::{mem, mem::MaybeUninit, ptr, slice, str};
 
 #[no_mangle]
 pub extern "C" fn wasmtime_config_component_model_set(c: &mut wasm_config_t, enable: bool) {
@@ -535,9 +537,29 @@ pub unsafe extern "C" fn wasmtime_component_from_binary(
 #[no_mangle]
 pub unsafe extern "C" fn wasmtime_component_delete(_: Box<wasmtime_component_t>) {}
 
-#[repr(transparent)]
+pub type wasmtime_component_func_callback_t = extern "C" fn(
+    *mut c_void,
+    CStoreContextMut<'_>,
+    *const wasmtime_component_val_t,
+    usize,
+    *mut wasmtime_component_val_t,
+    usize,
+) -> Option<Box<wasm_trap_t>>;
+
+struct HostFuncDefinition {
+    path: Vec<String>,
+    name: String,
+    signature: String,
+    callback: wasmtime_component_func_callback_t,
+    data: *mut c_void,
+    finalizer: Option<extern "C" fn(*mut std::ffi::c_void)>,
+}
+
+#[repr(C)]
 pub struct wasmtime_component_linker_t {
     linker: Linker<StoreData>,
+    is_built: bool,
+    functions: Vec<HostFuncDefinition>,
 }
 
 #[no_mangle]
@@ -546,7 +568,327 @@ pub extern "C" fn wasmtime_component_linker_new(
 ) -> Box<wasmtime_component_linker_t> {
     Box::new(wasmtime_component_linker_t {
         linker: Linker::new(&engine.engine),
+        is_built: false,
+        functions: Vec::new(),
     })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wasmtime_component_linker_define_func(
+    linker: &mut wasmtime_component_linker_t,
+    path_buf: *const u8,
+    path_len: usize,
+    name_buf: *const u8,
+    name_len: usize,
+    signature_buf: *const u8,
+    signature_len: usize,
+    callback: wasmtime_component_func_callback_t,
+    data: *mut c_void,
+    finalizer: Option<extern "C" fn(*mut std::ffi::c_void)>,
+) -> Option<Box<wasmtime_error_t>> {
+    if linker.is_built {
+        return Some(Box::new(wasmtime_error_t::from(anyhow!(
+            "cannot define a function in a linker already built"
+        ))));
+    }
+    let path = to_str!(path_buf, path_len)
+        .split('.')
+        .filter(|s| s.len() > 0)
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    let name = to_str!(name_buf, name_len).to_string();
+    let signature = to_str!(signature_buf, signature_len).to_string();
+    linker.functions.push(HostFuncDefinition {
+        path,
+        name,
+        signature,
+        callback,
+        data,
+        finalizer,
+    });
+    None
+}
+
+macro_rules! sig_to_type {
+    (i) => {
+        i32
+    };
+    (f) => {
+        f32
+    };
+    (s) => {
+        String
+    };
+    (v) => {
+        Vec<u8>
+    };
+}
+
+macro_rules! sig_to_wamr {
+    (i) => {
+        "i"
+    };
+    (f) => {
+        "f"
+    };
+    (s) => {
+        "$"
+    };
+    (v) => {
+        "*~"
+    };
+}
+
+macro_rules! ret_to_wamr {
+    (i) => {
+        "i"
+    };
+    (f) => {
+        "f"
+    };
+    (s) => {
+        "$"
+    };
+    (v) => {
+        "v"
+    };
+    (u) => {
+        ""
+    };
+}
+
+macro_rules! ret_to_type {
+    (i) => {
+        (i32,)
+    };
+    (f) => {
+        (f32,)
+    };
+    (s) => {
+        (String,)
+    };
+    (v) => {
+        (Vec<u8>,)
+    };
+    (u) => {
+        ()
+    };
+}
+
+macro_rules! sig_count {
+    () => { 0 };
+    ($head:ident) => { 1 };
+    ($head:ident, $($tail:ident),*) => { 1 + sig_count!($($tail),*) };
+}
+
+macro_rules! sig_to_val_t {
+    (i $arg:expr) => {
+        wasmtime_component_val_t::S32($arg)
+    };
+    (f $arg:expr) => {
+        wasmtime_component_val_t::F32($arg)
+    };
+    (s $arg:expr) => {{
+        let v = $arg.to_string().into_bytes();
+        wasmtime_component_val_t::String(v.into())
+    }};
+    (v $arg:expr) => {{
+        let v = $arg.iter().map(|v| wasmtime_component_val_t::U8(*v)).collect::<Vec<_>>();
+        wasmtime_component_val_t::List(v.into())
+    }};
+}
+
+macro_rules! ret_to_val_t {
+    ($vars:ident i) => {
+        $vars.push(wasmtime_component_val_t::S32(-1))
+    };
+    ($vars:ident f) => {
+        $vars.push(wasmtime_component_val_t::F32(0.0))
+    };
+    ($vars:ident s) => {
+        $vars.push(wasmtime_component_val_t::String(Vec::new().into()))
+    };
+    ($vars:ident v) => {
+        $vars.push(wasmtime_component_val_t::List(Vec::new().into()))
+    };
+    ($vars:ident u) => {};
+}
+
+macro_rules! val_t_to_ret {
+    ($output:ident i) => {
+        match &$output[0] {
+            wasmtime_component_val_t::S32(i) => Ok((*i,)),
+            _ => Err(anyhow!("unexpected output type")),
+        }
+    };
+    ($output:ident f) => {
+        match &$output[0] {
+            wasmtime_component_val_t::F32(f) => Ok((*f,)),
+            _ => Err(anyhow!("unexpected output type")),
+        }
+    };
+    ($output:ident s) => {
+        match &$output[0] {
+            wasmtime_component_val_t::String(s) => match std::str::from_utf8(s.as_slice()) {
+                Ok(s) => Ok((s.to_owned(),)),
+                Err(err) => Err(anyhow!(err)),
+            },
+            _ => Err(anyhow!("unexpected output type")),
+        }
+    };
+    ($output:ident v) => {
+        match &$output[0] {
+            wasmtime_component_val_t::List(v) => {
+                // FIXME JJL
+                Ok((v.as_slice().iter().map(|val| match val { wasmtime_component_val_t::U8(u) => *u, _ => 0u8 }).collect::<Vec<_>>(),))
+            },
+            _ => Err(anyhow!("unexpected output type")),
+        }
+    };
+    ($output:ident u) => {
+        Ok(())
+    };
+}
+
+macro_rules! define_c_callback_to_rust_component_fn {
+    ( ( $($i:ident $idx:tt),* ) -> $r:ident ) => {
+        paste::paste! {
+            #[allow(dead_code)]
+            #[allow(unused_variables)]
+            unsafe fn [< c_callback_to_rust_component_fn_ $($i) _ * _ $r >] (
+                callback: wasmtime_component_func_callback_t,
+                data: *mut c_void,
+                finalizer: Option<extern "C" fn(*mut std::ffi::c_void)>,
+            ) -> impl Fn(CStoreContextMut<'_>, ($(sig_to_type!($i),)*)) -> Result<ret_to_type!($r)> {
+                let foreign = crate::ForeignData { data, finalizer };
+                move |context: CStoreContextMut<'_>, args: ($(sig_to_type!($i),)*)|
+                {
+                    let _ = &foreign; // move entire foreign into this closure
+
+                    let mut vars = Vec::new();
+                    $(
+                    vars.push(sig_to_val_t!($i args.$idx));
+                    )*
+                    ret_to_val_t!(vars $r);
+                    // don't use unstable meta-variable expression because later versions of the nightly build
+                    // changed to require a '$' : ${count($i)} instead of ${count(i)}, so keep recursive count for now
+                    let nb_args = sig_count!($($i),*);
+                    let (inputs, outputs) = vars.split_at_mut(nb_args);
+                    // Invoke the C function pointer, getting the results.
+                    let out = callback(
+                        foreign.data,
+                        context,
+                        inputs.as_ptr(),
+                        inputs.len(),
+                        outputs.as_mut_ptr(),
+                        outputs.len(),
+                    );
+                    if let Some(trap) = out {
+                        return Err(trap.error);
+                    }
+                    val_t_to_ret!(outputs $r)
+                }
+            }
+        }
+    };
+}
+
+macro_rules! define_and_use_all_c_callbacks {
+    ($(($($i:ident),*) -> $r:ident;)*) => {
+        paste::paste! {
+            $(define_c_callback_to_rust_component_fn!(($($i ${index()}),*) -> $r);)*
+            fn insert_in_instance(instance: &mut LinkerInstance<StoreData>, function: &HostFuncDefinition) -> Result<()> {
+                match function.signature.as_str() {
+                    $(
+                        concat!("(", $(sig_to_wamr!($i),)* ")", ret_to_wamr!($r)) =>
+                            instance.func_wrap(&function.name, unsafe { [< c_callback_to_rust_component_fn_ $($i) _ * _ $r >](function.callback, function.data, function.finalizer) }),
+                    )*
+                    _ => Err(anyhow!("unknown signature {}", function.signature)),
+                }
+            }
+        }
+    };
+}
+
+define_and_use_all_c_callbacks!(
+    (i) -> i;
+    (i, i) -> i;
+    () -> i;
+    () -> u;
+    (i) -> u;
+    (s) -> u;
+    (s) -> i;
+    (f, f) -> f;
+    (s, s) -> s;
+    (s, v, v) -> i;
+    (s, s, i, i) -> u;
+    (s, s) -> i;
+    (s, v) -> i;
+    (v, v) -> i;
+    (v) -> i;
+    (i) -> v;
+    (s) -> v;
+    (v) -> v;
+    (s, v) -> v;
+    (s, v, i) -> v;
+);
+
+#[no_mangle]
+pub extern "C" fn wasmtime_component_linker_build(
+    linker: &mut wasmtime_component_linker_t,
+) -> Option<Box<wasmtime_error_t>> {
+    if linker.is_built {
+        return Some(Box::new(wasmtime_error_t::from(anyhow!(
+            "cannot build an already built linker"
+        ))));
+    }
+
+    struct InstanceTree {
+        children: HashMap<String, InstanceTree>,
+        functions: Vec<HostFuncDefinition>,
+    }
+
+    impl InstanceTree {
+        fn insert(&mut self, depth: usize, function: HostFuncDefinition) {
+            if function.path.len() == depth {
+                self.functions.push(function);
+            } else {
+                let child = self
+                    .children
+                    .entry(function.path[depth].to_string())
+                    .or_insert_with(|| InstanceTree {
+                        children: HashMap::new(),
+                        functions: Vec::new(),
+                    });
+                child.insert(depth + 1, function);
+            }
+        }
+        fn build(&self, mut instance: LinkerInstance<StoreData>) -> Result<()> {
+            for function in self.functions.iter() {
+                insert_in_instance(&mut instance, function)?;
+            }
+            for (name, child) in self.children.iter() {
+                let child_instance = instance.instance(&name)?;
+                child.build(child_instance)?;
+            }
+            Ok(())
+        }
+    }
+
+    let mut root = InstanceTree {
+        children: HashMap::new(),
+        functions: Vec::new(),
+    };
+    for function in linker.functions.drain(..) {
+        root.insert(0, function);
+    }
+    match root.build(linker.linker.root()) {
+        Ok(()) => {
+            linker.is_built = true;
+            None
+        }
+        Err(err) => Some(Box::new(wasmtime_error_t::from(anyhow!(err)))),
+    }
 }
 
 #[no_mangle]
@@ -557,6 +899,11 @@ pub extern "C" fn wasmtime_component_linker_instantiate(
     out: &mut *mut wasmtime_component_instance_t,
     trap_ret: &mut *mut wasm_trap_t,
 ) -> Option<Box<wasmtime_error_t>> {
+    if !linker.is_built && !linker.functions.is_empty() {
+        return Some(Box::new(wasmtime_error_t::from(anyhow!(
+            "cannot instantiate with a linker not built"
+        ))));
+    }
     match linker.linker.instantiate(store, &component.component) {
         Ok(instance) => {
             *out = Box::into_raw(Box::new(wasmtime_component_instance_t { instance }));
@@ -610,7 +957,8 @@ fn call_func(
         .map(|(ty, v)| v.clone().into_val(ty))
         .collect::<Result<Vec<_>>>()?;
     let mut results = vec![Val::Bool(false); raw_results.len()];
-    func.func.call(context.as_context_mut(), &params, &mut results)?;
+    func.func
+        .call(context.as_context_mut(), &params, &mut results)?;
     func.func.post_return(context)?;
     for (i, r) in results.iter().enumerate() {
         raw_results[i] = r.try_into()?;

@@ -12,7 +12,8 @@
 //! but otherwise an accompanying `wasmtime.h` API is provided which is more
 //! specific to Wasmtime and has fewer gymnastics to implement.
 
-#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals)]
+#![allow(non_snake_case, non_camel_case_types, non_upper_case_globals, unstable_features)]
+#![feature(macro_metavar_expr)]
 
 pub use wasmtime;
 use wasmtime::Trap;

@@ -165,6 +165,17 @@ wasmtime_component_linker_new(const wasm_engine_t *engine);
 
 typedef struct wasmtime_component_instance_t wasmtime_component_instance_t;
 
+typedef wasm_trap_t *(*wasmtime_component_func_callback_t)(
+    void *env, wasmtime_context_t *context, const wasmtime_component_val_t *args,
+    size_t nargs, wasmtime_component_val_t *results, size_t nresults);
+
+wasmtime_error_t *wasmtime_component_linker_define_func(
+    wasmtime_component_linker_t *linker, const char *path, size_t path_len,
+    const char *name, size_t name_len, const char *signature, size_t signature_len,
+    wasmtime_component_func_callback_t cb, void *data, void (*finalizer)(void *));
+
+wasmtime_error_t *wasmtime_component_linker_build(wasmtime_component_linker_t *linker);
+
 wasmtime_error_t *wasmtime_component_linker_instantiate(
     const wasmtime_component_linker_t *linker, wasmtime_context_t *context,
     const wasmtime_component_t *component,
@@ -174,7 +185,7 @@ typedef struct wasmtime_component_func_t wasmtime_component_func_t;
 
 bool wasmtime_component_instance_get_func(
     const wasmtime_component_instance_t *instance, wasmtime_context_t *context,
-    uint8_t *name, size_t name_len, wasmtime_component_func_t **item_out);
+    const char *name, size_t name_len, wasmtime_component_func_t **item_out);
 
 wasmtime_error_t *wasmtime_component_func_call(
     const wasmtime_component_func_t *func, wasmtime_context_t *context,

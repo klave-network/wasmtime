@@ -26,6 +26,7 @@ wasmtime = { workspace = true, features = ['cranelift', 'runtime'] }
 wasmtime-c-api-macros = { workspace = true }
 log = { workspace = true }
 tracing = { workspace = true }
+paste = "1.0.3"
 
 # Optional dependency for the `wat2wasm` API
 wat = { workspace = true, optional = true }
