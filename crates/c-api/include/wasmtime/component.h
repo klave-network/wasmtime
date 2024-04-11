@@ -61,16 +61,16 @@ typedef struct wasmtime_component_val_record_field_t
     element *data;                                                             \
   } wasmtime_component_##name##_t;                                             \
                                                                                \
-  WASM_API_EXTERN void wasmtime_component_##name##_vec_new_empty(              \
+  WASM_API_EXTERN void wasmtime_component_##name##_new_empty(                  \
       wasmtime_component_##name##_t *out);                                     \
-  WASM_API_EXTERN void wasmtime_component_##name##_vec_new_uninitialized(      \
+  WASM_API_EXTERN void wasmtime_component_##name##_new_uninitialized(          \
       wasmtime_component_##name##_t *out, size_t);                             \
-  WASM_API_EXTERN void wasmtime_component_##name##_vec_new(                    \
+  WASM_API_EXTERN void wasmtime_component_##name##_new(                        \
       wasmtime_component_##name##_t *out, size_t, element const[]);            \
-  WASM_API_EXTERN void wasmtime_component_##name##_vec_copy(                   \
+  WASM_API_EXTERN void wasmtime_component_##name##_copy(                       \
       wasmtime_component_##name##_t *out,                                      \
       const wasmtime_component_##name##_t *);                                  \
-  WASM_API_EXTERN void wasmtime_component_##name##_vec_delete(                 \
+  WASM_API_EXTERN void wasmtime_component_##name##_delete(                     \
       wasmtime_component_##name##_t *);
 
 // A vector of values.

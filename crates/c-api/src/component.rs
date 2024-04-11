@@ -45,11 +45,11 @@ declare_vecs! {
     (
         name: wasmtime_component_val_record_t,
         ty: wasmtime_component_val_record_field_t,
-        new: wasmtime_component_val_record_field_vec_new,
-        empty: wasmtime_component_val_record_field_vec_new_empty,
-        uninit: wasmtime_component_val_record_field_vec_new_uninitialized,
-        copy: wasmtime_component_val_record_field_vec_copy,
-        delete: wasmtime_component_val_record_field_vec_delete,
+        new: wasmtime_component_val_record_field_new,
+        empty: wasmtime_component_val_record_field_new_empty,
+        uninit: wasmtime_component_val_record_field_new_uninitialized,
+        copy: wasmtime_component_val_record_field_copy,
+        delete: wasmtime_component_val_record_field_delete,
     )
     (
         name: wasmtime_component_val_flags_t,
