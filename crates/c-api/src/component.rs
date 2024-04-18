@@ -831,6 +831,8 @@ define_and_use_all_c_callbacks!(
     (v) -> v;
     (s, v) -> v;
     (s, v, i) -> v;
+    (s, i, v, i, i, v) -> i;
+    (s, i) -> v;
 );
 
 #[no_mangle]
