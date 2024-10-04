@@ -822,6 +822,7 @@ define_and_use_all_c_callbacks!(
     (s, s) -> s;
     (s, v, v) -> i;
     (s, s, v, v) -> i;
+    (s, i, s, v, v) -> i;
     (s, s, i, i) -> u;
     (s, s) -> i;
     (s, v) -> i;
@@ -832,15 +833,18 @@ define_and_use_all_c_callbacks!(
     (v) -> v;
     (s, v) -> v;
     (s, s, v) -> v;
+    (s, i, s, v) -> v;
     (s, v, i) -> v;
     (s, i, v, i, i, v) -> i;
     (s, i, v, i, s, i, v) -> i;
     (s, s, s, i, v, i, s, i, v) -> i;
+    (s, i, s, s, i, v, i, s, i, v) -> i;
     (s, i, i, v) -> i;
     (s, i, s, i, v) -> i;
     (s, i) -> v;
     (s, i, s) -> v;
     (s, i, s, s) -> v;
+    (s, i, s, i, s) -> v;
     (i, v) -> v;    
     (i, s, v) -> v;    
 );
