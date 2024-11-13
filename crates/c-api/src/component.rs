@@ -613,9 +613,6 @@ macro_rules! sig_to_type {
     (i) => {
         i32
     };
-    (f) => {
-        f32
-    };
     (s) => {
         String
     };
@@ -628,9 +625,6 @@ macro_rules! sig_to_wamr {
     (i) => {
         "i"
     };
-    (f) => {
-        "f"
-    };
     (s) => {
         "$"
     };
@@ -640,14 +634,14 @@ macro_rules! sig_to_wamr {
 }
 
 macro_rules! ret_to_wamr {
-    (i) => {
-        "i"
+    (r) => {
+        "r"
     };
-    (f) => {
-        "f"
+    (b) => {
+        "b"
     };
     (s) => {
-        "$"
+        "s"
     };
     (v) => {
         "v"
@@ -658,17 +652,17 @@ macro_rules! ret_to_wamr {
 }
 
 macro_rules! ret_to_type {
-    (i) => {
-        (i32,)
+    (r) => {
+        (Result<(), String>,)
     };
-    (f) => {
-        (f32,)
+    (b) => {
+        (Result<bool, String>,)
     };
     (s) => {
-        (String,)
+        (Result<String, String>,)
     };
     (v) => {
-        (Vec<u8>,)
+        (Result<Vec<u8>, String>,)
     };
     (u) => {
         ()
@@ -685,63 +679,118 @@ macro_rules! sig_to_val_t {
     (i $arg:expr) => {
         wasmtime_component_val_t::S32($arg)
     };
-    (f $arg:expr) => {
-        wasmtime_component_val_t::F32($arg)
-    };
     (s $arg:expr) => {{
         let v = $arg.to_string().into_bytes();
         wasmtime_component_val_t::String(v.into())
     }};
     (v $arg:expr) => {{
-        let v = $arg.iter().map(|v| wasmtime_component_val_t::U8(*v)).collect::<Vec<_>>();
+        let v = $arg
+            .iter()
+            .map(|v| wasmtime_component_val_t::U8(*v))
+            .collect::<Vec<_>>();
         wasmtime_component_val_t::List(v.into())
     }};
 }
 
 macro_rules! ret_to_val_t {
-    ($vars:ident i) => {
-        $vars.push(wasmtime_component_val_t::S32(-1))
-    };
-    ($vars:ident f) => {
-        $vars.push(wasmtime_component_val_t::F32(0.0))
-    };
-    ($vars:ident s) => {
-        $vars.push(wasmtime_component_val_t::String(Vec::new().into()))
-    };
-    ($vars:ident v) => {
-        $vars.push(wasmtime_component_val_t::List(Vec::new().into()))
-    };
     ($vars:ident u) => {};
+    ($vars:ident $unused:ident) => {
+        $vars.push(wasmtime_component_val_t::Result(
+            wasmtime_component_val_result_t {
+                // allocate a placeholder wasmtime_component_val_t
+                value: Some(Box::new(wasmtime_component_val_t::default())),
+                error: false,
+            },
+        ))
+    };
+}
+
+fn extract_error<T>(val: &Option<Box<wasmtime_component_val_t>>) -> Result<(Result<T, String>,)> {
+    if let Some(boxed) = val {
+        if let wasmtime_component_val_t::String(s) = boxed.as_ref() {
+            Ok((Err(std::str::from_utf8(s.as_slice())?.to_owned()),))
+        } else {
+            Err(anyhow!("unexpected type in error result"))
+        }
+    } else {
+        Err(anyhow!("no value in error result"))
+    }
+}
+
+macro_rules! extract_value {
+    ($val:ident, $val_pat:pat, $val_res:expr) => {
+        if let Some(boxed) = $val {
+            if let $val_pat = boxed.as_ref() {
+                Ok((Ok($val_res),))
+            } else {
+                Err(anyhow!("unexpected type in value result"))
+            }
+        } else {
+            Err(anyhow!("no value in value result"))
+        }
+    };
 }
 
 macro_rules! val_t_to_ret {
-    ($output:ident i) => {
+    ($output:ident r) => {
         match &$output[0] {
-            wasmtime_component_val_t::S32(i) => Ok((*i,)),
+            wasmtime_component_val_t::Result(wasmtime_component_val_result_t { value, error }) => {
+                if *error {
+                    extract_error(value)
+                } else {
+                    Ok((Ok(()),))
+                }
+            }
             _ => Err(anyhow!("unexpected output type")),
         }
     };
-    ($output:ident f) => {
+    ($output:ident b) => {
         match &$output[0] {
-            wasmtime_component_val_t::F32(f) => Ok((*f,)),
+            wasmtime_component_val_t::Result(wasmtime_component_val_result_t { value, error }) => {
+                if *error {
+                    extract_error(value)
+                } else {
+                    extract_value!(value, wasmtime_component_val_t::Bool(b), *b)
+                }
+            }
             _ => Err(anyhow!("unexpected output type")),
         }
     };
     ($output:ident s) => {
         match &$output[0] {
-            wasmtime_component_val_t::String(s) => match std::str::from_utf8(s.as_slice()) {
-                Ok(s) => Ok((s.to_owned(),)),
-                Err(err) => Err(anyhow!(err)),
-            },
+            wasmtime_component_val_t::Result(wasmtime_component_val_result_t { value, error }) => {
+                if *error {
+                    extract_error(value)
+                } else {
+                    extract_value!(
+                        value,
+                        wasmtime_component_val_t::String(s),
+                        std::str::from_utf8(s.as_slice())?.to_owned())
+                }
+            }
             _ => Err(anyhow!("unexpected output type")),
         }
     };
     ($output:ident v) => {
         match &$output[0] {
-            wasmtime_component_val_t::List(v) => {
-                // FIXME JJL
-                Ok((v.as_slice().iter().map(|val| match val { wasmtime_component_val_t::U8(u) => *u, _ => 0u8 }).collect::<Vec<_>>(),))
-            },
+            wasmtime_component_val_t::Result(wasmtime_component_val_result_t { value, error }) => {
+                if *error {
+                    extract_error(value)
+                } else {
+                    extract_value!(
+                        value,
+                        wasmtime_component_val_t::List(v),
+                        v
+                            .as_slice()
+                            .iter()
+                            .map(|val| match val {
+                                wasmtime_component_val_t::U8(u) => Ok(*u),
+                                _ => Err(anyhow!("unexpected type in list in value result (only u8 supported)")),
+                            })
+                            .collect::<Result<Vec<u8>>>()?
+                    )
+                }
+            }
             _ => Err(anyhow!("unexpected output type")),
         }
     };
@@ -811,42 +860,29 @@ macro_rules! define_and_use_all_c_callbacks {
 }
 
 define_and_use_all_c_callbacks!(
-    (i) -> i;
-    (i, i) -> i;
-    () -> i;
-    () -> u;
-    (i) -> u;
-    (s) -> u;
-    (s) -> i;
-    (f, f) -> f;
-    (s, s) -> s;
-    (s, v, v) -> i;
-    (s, s, v, v) -> i;
-    (s, i, s, v, v) -> i;
     (s, s, i, i) -> u;
-    (s, s) -> i;
-    (s, v) -> i;
-    (v, v) -> i;
-    (v) -> i;
-    (i) -> v;
+    () -> u;
+    (s) -> u;
+    (s) -> r;
+    (s) -> b;
     (s) -> v;
+    (s) -> s;
     (v) -> v;
+    (i) -> v;
+    (s, v) -> r;
     (s, v) -> v;
-    (s, s, v) -> v;
-    (s, i, s, v) -> v;
-    (s, v, i) -> v;
-    (s, i, v, i, i, v) -> i;
-    (s, i, v, i, s, i, v) -> i;
-    (s, s, s, i, v, i, s, i, v) -> i;
-    (s, i, s, s, i, v, i, s, i, v) -> i;
-    (s, i, i, v) -> i;
-    (s, i, s, i, v) -> i;
+    (s, s) -> r;
     (s, i) -> v;
-    (s, i, s) -> v;
-    (s, i, s, s) -> v;
+    (s, v, v) -> r;
+    (s, v, v) -> b;
+    (s, v, i) -> v;
+    (i, s, v) -> v;
+    (s, i, s, v) -> v;
+    (s, i, s, v, v) -> b;
+    (s, i, s, i, v) -> r;
     (s, i, s, i, s) -> v;
-    (i, v) -> v;    
-    (i, s, v) -> v;    
+    (s, i, v, i, s, i, v) -> r;
+    (s, i, s, s, i, v, i, s, i, v) -> r;
 );
 
 #[no_mangle]
