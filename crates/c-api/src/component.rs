@@ -883,6 +883,7 @@ define_and_use_all_c_callbacks!(
     (s, i, s, i, v) -> r;
     (s, i, s, i, s) -> v;
     (s, i, v, i, s, i, v) -> r;
+    (s, i, s, s, i, s, i, v) -> r;
     (s, i, s, s, i, v, i, s, i, v) -> r;
 );
 
