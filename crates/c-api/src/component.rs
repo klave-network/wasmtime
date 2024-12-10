@@ -880,9 +880,12 @@ define_and_use_all_c_callbacks!(
     (s, i, s, v) -> v;
     (s, i, s, v, v) -> b;
     (s, i, s, i, v) -> r;
+    (s, i, s, i, v) -> s;
     (s, i, s, i, s) -> v;
     (s, i, v, i, s, i, v) -> r;
+    (s, i, v, i, s, i, v) -> s;
     (s, i, s, s, i, v, i, s, i, v) -> r;
+    (s, i, s, s, i, v, i, s, i, v) -> s;
 );
 
 #[no_mangle]
