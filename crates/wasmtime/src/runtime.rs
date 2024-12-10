@@ -57,6 +57,8 @@ pub mod component;
 cfg_if::cfg_if! {
     if #[cfg(miri)] {
         // no extensions on miri
+    } else if #[cfg(target_vendor = "teaclave")] {
+        // we should eventually have it for sgx, but strange error message for now
     } else if #[cfg(unix)] {
         pub mod unix;
     } else if #[cfg(windows)] {

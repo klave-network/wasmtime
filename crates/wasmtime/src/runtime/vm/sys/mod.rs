@@ -50,6 +50,9 @@ cfg_if::cfg_if! {
     if #[cfg(miri)] {
         mod miri;
         pub use miri::*;
+    } else if #[cfg(target_vendor = "teaclave")] {
+        mod sgx;
+        pub use sgx::*;
     } else if #[cfg(windows)] {
         mod windows;
         pub use windows::*;
