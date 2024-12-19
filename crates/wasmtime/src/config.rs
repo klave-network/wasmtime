@@ -277,7 +277,10 @@ impl Config {
             ret.cranelift_opt_level(OptLevel::Speed);
         }
 
+        #[cfg(not(target_vendor = "teaclave"))]
         ret.wasm_backtrace_details(WasmBacktraceDetails::Environment);
+        #[cfg(target_vendor = "teaclave")]
+        ret.wasm_backtrace_details(WasmBacktraceDetails::Enable);
 
         ret
     }
