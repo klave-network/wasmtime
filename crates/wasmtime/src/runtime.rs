@@ -55,8 +55,8 @@ pub(crate) mod vm;
 pub mod component;
 
 cfg_if::cfg_if! {
-    if #[cfg(miri)] {
-        // no extensions on miri
+    if #[cfg(any(miri, target_vendor = "teaclave"))] {
+        // no extensions on miri or sgx
     } else if #[cfg(unix)] {
         pub mod unix;
     } else if #[cfg(windows)] {
